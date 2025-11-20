@@ -6,7 +6,6 @@ from pymongo import MongoClient
 
 # --------- MongoDB Connection ---------
 def get_mongo_data():
-    # Streamlit secrets se Mongo URI etc padho
     mongo_uri = st.secrets["mongo"]["uri"]
     db_name = st.secrets["mongo"]["db"]
     collection_name = st.secrets["mongo"]["collection"]
@@ -19,16 +18,29 @@ def get_mongo_data():
 
 # --------- Utility Functions ---------
 def load_data(file):
-    return pd.read_csv(file)
+    df = pd.read_csv(file)
+    # Rename columns for code compatibility
+    df = df.rename(columns={
+        "congestionindex": "traffic_index",
+        "traveldelayminutes": "pollution_index",
+        "vehicletype": "transport_mode",
+        "weather": "weather",
+        "city": "area"
+    })
+    # Add "rain" as binary if weather is Rainy
+    df["rain"] = (df["weather"].str.lower() == "rainy").astype(int)
+    # Add "hour" from timestamp column (assume format 'YYYY-MM-DD HHMMSS')
+    df["hour"] = pd.to_datetime(df["timestamp"], errors='coerce').dt.hour
+    return df
 
 def clean_data(df):
     # Remove NAs, duplicates
-    df = df.dropna()
+    df = df.dropna(subset=['traffic_index', 'pollution_index'])
     df = df.drop_duplicates()
     return df
 
 def add_features(df):
-    # Example: peak hour, random calculations (customize based on your columns!)
+    # Example: peak hour, impact by rain
     if "hour" in df.columns:
         df["PeakHour"] = np.where((df["hour"] >= 7) & (df["hour"] <= 10), "Morning", "Other")
     if "rain" in df.columns and "traffic_index" in df.columns:
@@ -52,6 +64,17 @@ if source == "Local CSV":
 else:
     try:
         df = get_mongo_data()
+        # Rename columns after fetch from Mongo
+        df = df.rename(columns={
+            "congestionindex": "traffic_index",
+            "traveldelayminutes": "pollution_index",
+            "vehicletype": "transport_mode",
+            "weather": "weather",
+            "city": "area"
+        })
+        # Add "rain" as binary if weather is Rainy
+        df["rain"] = (df["weather"].str.lower() == "rainy").astype(int)
+        df["hour"] = pd.to_datetime(df["timestamp"], errors='coerce').dt.hour
     except Exception as e:
         st.error("Database error! Check secrets and connection.")
         st.stop()
@@ -61,7 +84,10 @@ df = clean_data(df)
 df = add_features(df)
 
 st.header("Traffic & Pollution Overview")
-st.dataframe(df.describe())
+if not df.empty:
+    st.dataframe(df.describe())
+else:
+    st.warning("Dataframe is empty after loading/cleaning!")
 
 # --- Visualization 1: Traffic vs Pollution ---
 if "traffic_index" in df.columns and "pollution_index" in df.columns:
@@ -121,4 +147,3 @@ if st.sidebar.button("Save summary to MongoDB") and source == "MongoDB":
     summary = {"desc": "App run summary", "shape": str(df.shape)}
     collection.insert_one(summary)
     st.sidebar.success("Saved summary to MongoDB!")
-
